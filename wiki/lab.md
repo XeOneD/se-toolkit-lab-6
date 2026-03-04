@@ -5,7 +5,7 @@
 - [What is a lab](#what-is-a-lab)
 - [Constants](#constants)
   - [`<lab-repo-name>`](#lab-repo-name)
-- [Prompts for AI coding agents](#prompts-for-ai-coding-agents)
+- [Prompts for coding agents](#prompts-for-coding-agents)
   - [Make the task instructions linear](#make-the-task-instructions-linear)
   - [Give directions on solving the task](#give-directions-on-solving-the-task)
 
@@ -15,7 +15,7 @@ A lab is the time for learning:
 
 - under the supervision of a TA
 - together with your classmates
-- with the help of AI assistants (chatbots, [AI coding agents](./coding-agents.md#what-is-a-coding-agent), etc.)
+- with the help of AI assistants (chatbots, [coding agents](./coding-agents.md#what-is-a-coding-agent), etc.)
 
 ## Constants
 
@@ -23,10 +23,10 @@ A lab is the time for learning:
 
 `se-toolkit-lab-4` (without `<` and `>`).
 
-## Prompts for AI coding agents
+## Prompts for coding agents
 
 > [!IMPORTANT]
-> It's recommended to use an AI [coding agent](./coding-agents.md#what-is-a-coding-agent)
+> It's recommended to use a [coding agent](./coding-agents.md#what-is-a-coding-agent)
 > because it can read files in your repo and understand the project context
 > better than an LLM in a web chat.
 
