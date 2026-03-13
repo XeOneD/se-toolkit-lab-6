@@ -305,6 +305,15 @@ The `query_api` tool has an `auth` parameter (default: true):
 - Use `auth: true` (default) for normal API requests that require authentication
 - Use `auth: false` when you need to test unauthenticated endpoints or check error responses
 
+IMPORTANT RULES FOR TOOL SELECTION:
+- Questions about HTTP status codes (401, 404, 500, etc.) → Use `query_api` and check the response status_code
+- Questions about "without authentication" or "without API key" → Use `query_api` with `auth: false`
+- Questions about "what does API return" → Use `query_api` to make the actual request
+- Questions about "how many items" → Use `query_api` with GET /items/
+- Questions about file structure → Use `list_files`
+- Questions about documentation → Use `read_file` on wiki files
+- Questions about source code → Use `read_file` on backend files
+
 Path rules for list_files and read_file (IMPORTANT):
 - All paths are relative to the project root (e.g., 'wiki', 'backend/app', 'backend/app/routers')
 - When you see a directory in list_files output (ends with '/'), combine the current path with the directory name
@@ -334,6 +343,11 @@ Example of good final answer:
 
 Example of bad response (DO NOT do this):
 "Let me check the routers directory to see what files are there."
+
+Example for status code question:
+Question: "What HTTP status code does the API return when you request /items/ without authentication?"
+Correct approach: Call query_api with method="GET", path="/items/", auth=false
+Then answer: "The API returns HTTP status code 401 (Unauthorized) when requested without authentication."
 """
 
 
