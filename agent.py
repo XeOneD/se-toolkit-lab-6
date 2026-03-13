@@ -24,12 +24,18 @@ MAX_TOOL_CALLS = 10
 
 
 def load_env():
-    """Load environment variables from .env.agent.secret."""
+    """Load environment variables from .env.agent.secret and .env.docker.secret."""
+    # Load LLM config from .env.agent.secret
     env_path = Path(__file__).parent / ".env.agent.secret"
     if not env_path.exists():
         print(f"Error: {env_path} not found", file=sys.stderr)
         sys.exit(1)
     load_dotenv(env_path)
+    
+    # Also load .env.docker.secret for LMS_API_KEY if it exists
+    docker_env_path = Path(__file__).parent / ".env.docker.secret"
+    if docker_env_path.exists():
+        load_dotenv(docker_env_path, override=False)
 
 
 def get_llm_config():
@@ -46,6 +52,19 @@ def get_llm_config():
         sys.exit(1)
 
     return api_key, api_base, model
+
+
+def get_api_config() -> tuple[str, str]:
+    """Get API configuration from environment variables."""
+    lms_api_key = os.getenv("LMS_API_KEY")
+    api_base_url = os.getenv("AGENT_API_BASE_URL", "http://localhost:42002")
+
+    if not lms_api_key:
+        print("Error: Missing LMS_API_KEY", file=sys.stderr)
+        print("  LMS_API_KEY: missing", file=sys.stderr)
+        sys.exit(1)
+
+    return lms_api_key, api_base_url
 
 
 def get_project_root() -> Path:
@@ -111,6 +130,60 @@ def list_files(path: str) -> dict[str, Any]:
         return {"success": False, "error": str(e), "entries": []}
 
 
+def query_api(method: str, path: str, body: str = "", auth: bool = True) -> dict[str, Any]:
+    """Call the backend API with optional authentication."""
+    # Validate method
+    allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+    method_upper = method.upper()
+    if method_upper not in allowed_methods:
+        return {"success": False, "error": f"Invalid HTTP method: {method}", "status_code": None, "body": None}
+
+    # Validate path
+    if not path:
+        return {"success": False, "error": "Path cannot be empty", "status_code": None, "body": None}
+    if not path.startswith("/"):
+        return {"success": False, "error": "Path must start with /", "status_code": None, "body": None}
+
+    # Build URL
+    try:
+        lms_api_key, api_base_url = get_api_config()
+    except SystemExit:
+        return {"success": False, "error": "Missing API configuration", "status_code": None, "body": None}
+
+    url = f"{api_base_url.rstrip('/')}{path}"
+
+    # Build headers - API uses Bearer token authentication
+    headers = {"Content-Type": "application/json"}
+    if auth:
+        headers["Authorization"] = f"Bearer {lms_api_key}"
+
+    # Make request
+    print(f"Querying API: {method_upper} {url} (auth={auth})", file=sys.stderr)
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            kwargs = {"headers": headers}
+            if body and method_upper in ["POST", "PUT", "PATCH"]:
+                kwargs["json"] = json.loads(body) if body else None
+
+            response = client.request(method_upper, url, **kwargs)
+
+            return {
+                "success": True,
+                "error": "",
+                "status_code": response.status_code,
+                "body": response.json() if response.content else None
+            }
+    except httpx.TimeoutException:
+        return {"success": False, "error": "API request timed out (30s)", "status_code": None, "body": None}
+    except httpx.HTTPError as e:
+        return {"success": False, "error": str(e), "status_code": None, "body": None}
+    except json.JSONDecodeError as e:
+        return {"success": False, "error": f"Invalid JSON response: {e}", "status_code": None, "body": None}
+    except Exception as e:
+        return {"success": False, "error": str(e), "status_code": None, "body": None}
+
+
 def get_tool_schemas() -> list[dict[str, Any]]:
     """Get tool schemas for function calling."""
     return [
@@ -147,6 +220,35 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                     "required": ["path"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_api",
+                "description": "Call the backend LMS API to fetch real-time data. Use this for questions about current data (item counts, scores, analytics) or system status. Do NOT use for documentation questions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "method": {
+                            "type": "string",
+                            "description": "HTTP method (GET, POST, PUT, DELETE, PATCH)"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "API endpoint path (e.g., '/items/', '/analytics/completion-rate')"
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "JSON request body for POST/PUT requests (optional)"
+                        },
+                        "auth": {
+                            "type": "boolean",
+                            "description": "Whether to include authentication header (default: true). Set to false to test unauthenticated endpoints."
+                        }
+                    },
+                    "required": ["method", "path"]
+                }
+            }
         }
     ]
 
@@ -171,25 +273,68 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
         else:
             return f"Error: {result['error']}"
 
+    elif name == "query_api":
+        method = args.get("method", "GET")
+        path = args.get("path", "")
+        body = args.get("body", "")
+        auth = args.get("auth", True)  # Default to authenticated requests
+        result = query_api(method, path, body, auth)
+        if result["success"]:
+            return json.dumps({"status_code": result["status_code"], "body": result["body"]})
+        else:
+            return f"Error: {result['error']}"
+
     else:
         return f"Error: Unknown tool: {name}"
 
 
 def get_system_prompt() -> str:
     """Get the system prompt for the agent."""
-    return """You are a documentation assistant. You help users find information in the project documentation.
+    return """You are a documentation and system assistant. You help users find information in the project documentation and query the live backend system.
 
-You have access to two tools:
+You have access to three tools:
 1. `list_files` - List files in a directory. Use this to discover what files exist.
-2. `read_file` - Read the contents of a file. Use this to find specific information.
+2. `read_file` - Read the contents of a file. Use this to find specific information in documentation or source code.
+3. `query_api` - Call the backend LMS API to fetch real-time data. Use this for questions about:
+   - Current data (item counts, learner info, scores, analytics)
+   - System status (health checks, endpoints)
+   - Real-time information that may differ from documentation
+   - HTTP status codes and error responses
+
+The `query_api` tool has an `auth` parameter (default: true):
+- Use `auth: true` (default) for normal API requests that require authentication
+- Use `auth: false` when you need to test unauthenticated endpoints or check error responses
+
+Path rules for list_files and read_file (IMPORTANT):
+- All paths are relative to the project root (e.g., 'wiki', 'backend/app', 'backend/app/routers')
+- When you see a directory in list_files output (ends with '/'), combine the current path with the directory name
+- Example: if listing 'backend' shows 'app/', use 'backend/app' to explore further (NOT just 'app')
+- Example: if listing 'backend/app' shows 'routers/', use 'backend/app/routers' to explore further
+
+CRITICAL: Your final response (when not calling tools) must be a COMPLETE answer to the user's question.
+- Do NOT say "Let me check..." or "I need to look at..." in your final answer
+- Do NOT describe what you will do next - just provide the answer
+- Use tools to gather information, then respond with the complete answer
 
 When answering questions:
-1. First use `list_files` to explore relevant directories (like 'wiki')
-2. Then use `read_file` to read specific files that contain the answer
-3. Include a source reference in your answer (file path and section if applicable)
-4. Format section references as: filename.md#section-name (lowercase, hyphens instead of spaces)
+1. For conceptual/how-to questions: Use `list_files` to explore, then `read_file` to find the answer
+2. For data questions (how many, what is the value): Use `query_api` with appropriate endpoint
+3. For implementation details: Use `read_file` on source code files
+4. For HTTP status codes or error testing: Use `query_api` with `auth: false` if needed
+5. Include a source reference in your answer when using wiki/docs (file path + section if applicable)
+6. Format section references as: filename.md#section-name (lowercase, hyphens instead of spaces)
 
-Think step by step. Use tools to gather information before giving your final answer."""
+Example of good final answer:
+"The backend has 5 router modules in backend/app/routers/:
+- items.py: Handles CRUD operations for items
+- learners.py: Manages learner data
+- interactions.py: Tracks user interactions
+- analytics.py: Provides analytics endpoints
+- pipeline.py: Manages ETL pipeline"
+
+Example of bad response (DO NOT do this):
+"Let me check the routers directory to see what files are there."
+"""
 
 
 def call_llm(

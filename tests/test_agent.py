@@ -113,3 +113,43 @@ class TestDocumentationAgent:
         # Should use list_files
         tool_names = [tc.get("tool") for tc in output["tool_calls"]]
         assert "list_files" in tool_names, f"Expected 'list_files' in tool calls, got: {tool_names}"
+
+
+class TestSystemAgent:
+    """Tests for system agent query_api tool."""
+
+    def test_agent_uses_query_api_for_framework_question(self):
+        """Test that agent uses read_file tool to find framework from source code."""
+        stdout, stderr, returncode = run_agent("What Python web framework does the backend use?")
+
+        assert returncode == 0, f"Agent failed: {stderr}"
+        output = json.loads(stdout)
+
+        # Should have tool calls
+        assert len(output.get("tool_calls", [])) > 0, "Expected tool calls for framework question"
+
+        # Should use read_file to check source code
+        tool_names = [tc.get("tool") for tc in output["tool_calls"]]
+        assert "read_file" in tool_names, f"Expected 'read_file' in tool calls, got: {tool_names}"
+
+        # Answer should mention FastAPI
+        answer = output.get("answer", "").lower()
+        assert "fastapi" in answer, f"Expected 'fastapi' in answer, got: {answer}"
+
+    def test_agent_uses_query_api_for_status_code_question(self):
+        """Test that agent uses query_api with auth:false for status code question."""
+        stdout, stderr, returncode = run_agent("What HTTP status code does the API return when you request /items/ without authentication?")
+
+        assert returncode == 0, f"Agent failed: {stderr}"
+        output = json.loads(stdout)
+
+        # Should have tool calls
+        assert len(output.get("tool_calls", [])) > 0, "Expected tool calls for status code question"
+
+        # Should use query_api
+        tool_names = [tc.get("tool") for tc in output["tool_calls"]]
+        assert "query_api" in tool_names, f"Expected 'query_api' in tool calls, got: {tool_names}"
+
+        # Answer should mention 401 or Unauthorized
+        answer = output.get("answer", "").lower()
+        assert "401" in answer or "unauthorized" in answer, f"Expected '401' or 'unauthorized' in answer, got: {answer}"
